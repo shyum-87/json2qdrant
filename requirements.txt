@@ -1,0 +1,5 @@
+streamlit>=1.32.0
+qdrant-client>=1.9.0
+# llama-cpp-python>=0.2.90  # 빌드 실패 - MSVC 컴파일러 오류, 별도 설치 필요
+pyyaml>=6.0.1
+pytest>=8.0.0
