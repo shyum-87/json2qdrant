@@ -3,9 +3,9 @@ qdrant:
   default_collection: my_documents
 
 embedding:
-  model_path: C:/Users/shyum/.ollama/models/blobs/sha256-REPLACE_WITH_ACTUAL_HASH
-  n_gpu_layers: 0
-  n_ctx: 512
+  backend: ollama
+  ollama_url: http://localhost:11434
+  model_name: bge-m3:latest
   embedding_dim: 1024
 
 paths:

@@ -46,12 +46,17 @@ with st.expander("⚙️ 설정", expanded=False):
     collection_name_input = st.text_input(
         "컬렉션 이름", value=config["qdrant"]["default_collection"]
     )
-    model_path_input = st.text_input(
-        "bge-m3 GGUF 모델 경로", value=config["embedding"]["model_path"]
+    ollama_url_input = st.text_input(
+        "Ollama URL", value=config["embedding"].get("ollama_url", "http://localhost:11434")
+    )
+    model_name_input = st.text_input(
+        "임베딩 모델명", value=config["embedding"].get("model_name", "bge-m3:latest")
     )
     if st.button("설정 저장"):
         config["qdrant"]["default_collection"] = collection_name_input
-        config["embedding"]["model_path"] = model_path_input
+        config["embedding"]["backend"] = "ollama"
+        config["embedding"]["ollama_url"] = ollama_url_input
+        config["embedding"]["model_name"] = model_name_input
         with open("config.yaml", "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
         if "model" in st.session_state:
@@ -60,16 +65,13 @@ with st.expander("⚙️ 설정", expanded=False):
         st.rerun()
 
 collection_name = config["qdrant"]["default_collection"]
-model_path = config["embedding"]["model_path"]
 
 if "model" not in st.session_state:
-    if Path(model_path).exists():
-        with st.spinner("bge-m3 모델 로딩 중... (처음 한 번만 실행됩니다)"):
+    try:
+        with st.spinner("임베딩 백엔드 초기화 중..."):
             st.session_state["model"] = load_model(config)
-    else:
-        st.warning(
-            f"⚠️ 모델 파일을 찾을 수 없습니다: {model_path}\n설정에서 경로를 수정하세요."
-        )
+    except Exception as e:
+        st.warning(f"⚠️ 임베딩 백엔드 초기화 실패: {e}")
         st.session_state["model"] = None
 
 col_title, col_refresh = st.columns([5, 1])

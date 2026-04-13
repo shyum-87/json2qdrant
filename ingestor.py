@@ -1,4 +1,5 @@
 import json
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -127,13 +128,46 @@ def ingest_file(
     }
 
 
-def load_model(config: dict) -> Any:
-    from llama_cpp import Llama
+class OllamaEmbedder:
+    """Ollama /api/embeddings 래퍼. Llama.create_embedding과 동일한 반환 형태를 흉내낸다."""
 
-    return Llama(
-        model_path=config["embedding"]["model_path"],
-        n_gpu_layers=config["embedding"].get("n_gpu_layers", 0),
-        n_ctx=config["embedding"].get("n_ctx", 512),
-        embedding=True,
-        verbose=False,
-    )
+    def __init__(self, base_url: str, model_name: str, timeout: float = 60.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.timeout = timeout
+
+    def create_embedding(self, text: str) -> dict:
+        payload = json.dumps({"model": self.model_name, "prompt": text}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/embeddings",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        embedding = body.get("embedding")
+        if not embedding:
+            raise RuntimeError(f"Ollama 임베딩 응답이 비어 있습니다: {body}")
+        return {"data": [{"embedding": embedding}]}
+
+
+def load_model(config: dict) -> Any:
+    emb = config["embedding"]
+    backend = emb.get("backend", "ollama")
+    if backend == "ollama":
+        return OllamaEmbedder(
+            base_url=emb.get("ollama_url", "http://localhost:11434"),
+            model_name=emb["model_name"],
+        )
+    if backend == "llama_cpp":
+        from llama_cpp import Llama
+
+        return Llama(
+            model_path=emb["model_path"],
+            n_gpu_layers=emb.get("n_gpu_layers", 0),
+            n_ctx=emb.get("n_ctx", 512),
+            embedding=True,
+            verbose=False,
+        )
+    raise ValueError(f"알 수 없는 embedding.backend: {backend}")
