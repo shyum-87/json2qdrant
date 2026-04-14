@@ -1,12 +1,15 @@
-qdrant:
-  url: http://localhost:6333
-  default_collection: my_documents
-
 embedding:
   backend: ollama
-  ollama_url: http://localhost:11434
-  model_name: bge-m3:latest
   embedding_dim: 1024
-
+  model_name: bge-m3:latest
+  ollama_url: http://localhost:11434
 paths:
   input_dir: ./input
+qdrant:
+  default_collection: my_documents
+  url: http://localhost:6333
+ui:
+  language: ko
+chunking:
+  chunk_size: 200
+  overlap: 50
