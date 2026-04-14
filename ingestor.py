@@ -83,12 +83,12 @@ def get_or_create_collection(client: QdrantClient, name: str, dim: int) -> None:
         )
 
 
-def delete_existing_source(client: QdrantClient, collection: str, source: str) -> None:
+def delete_existing_doc(client: QdrantClient, collection: str, doc_id: str) -> None:
     client.delete(
         collection_name=collection,
         points_selector=FilterSelector(
             filter=Filter(
-                must=[FieldCondition(key="source", match=MatchValue(value=source))]
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
             )
         ),
     )

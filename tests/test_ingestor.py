@@ -3,7 +3,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ingestor import chunk_text, embed_chunks, load_documents
+from ingestor import (
+    chunk_text,
+    delete_existing_doc,
+    embed_chunks,
+    load_documents,
+)
 
 
 def test_chunk_text_empty_returns_empty_list():
@@ -103,3 +108,15 @@ def test_embed_chunks_empty():
     mock_model = MagicMock()
     assert embed_chunks(mock_model, []) == []
     mock_model.create_embedding.assert_not_called()
+
+
+def test_delete_existing_doc_filters_by_doc_id():
+    mock_client = MagicMock()
+    delete_existing_doc(mock_client, "my_docs", "2025_W34_abc")
+
+    mock_client.delete.assert_called_once()
+    kwargs = mock_client.delete.call_args.kwargs
+    assert kwargs["collection_name"] == "my_docs"
+    condition = kwargs["points_selector"].filter.must[0]
+    assert condition.key == "doc_id"
+    assert condition.match.value == "2025_W34_abc"
