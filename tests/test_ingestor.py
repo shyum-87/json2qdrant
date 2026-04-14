@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ingestor import chunk_text, load_documents
+from ingestor import chunk_text, embed_chunks, load_documents
 
 
 def test_chunk_text_empty_returns_empty_list():
@@ -87,3 +87,19 @@ def test_load_documents_rejects_scalar(tmp_path):
     f.write_text("42", encoding="utf-8")
     with pytest.raises(ValueError):
         load_documents(f)
+
+
+def test_embed_chunks_returns_vectors():
+    mock_model = MagicMock()
+    mock_model.create_embedding.return_value = {
+        "data": [{"embedding": [0.1, 0.2, 0.3]}]
+    }
+    result = embed_chunks(mock_model, ["첫", "둘"])
+    assert result == [[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]
+    assert mock_model.create_embedding.call_count == 2
+
+
+def test_embed_chunks_empty():
+    mock_model = MagicMock()
+    assert embed_chunks(mock_model, []) == []
+    mock_model.create_embedding.assert_not_called()

@@ -94,10 +94,10 @@ def delete_existing_source(client: QdrantClient, collection: str, source: str) -
     )
 
 
-def embed_chunks(model: Any, chunks: list[dict]) -> list[list[float]]:
+def embed_chunks(model: Any, texts: list[str]) -> list[list[float]]:
     vectors: list[list[float]] = []
-    for chunk in chunks:
-        response = model.create_embedding(chunk["text"])
+    for text in texts:
+        response = model.create_embedding(text)
         vectors.append(response["data"][0]["embedding"])
     return vectors
 
