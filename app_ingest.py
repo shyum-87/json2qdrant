@@ -7,10 +7,12 @@ import yaml
 
 from i18n import DEFAULT_LANG, SUPPORTED_LANGS, normalize_lang, t
 from ingestor import (
+    chunk_text,
     get_qdrant_client,
     ingest_file,
     is_qdrant_healthy,
     load_config,
+    load_documents,
     load_model,
 )
 
@@ -139,8 +141,6 @@ json_files = sorted(
 if not json_files:
     st.info(tr("no_json_files"))
 else:
-    from ingestor import load_documents, chunk_text  # local import avoids top-level cycle risk
-
     chunk_size = int(config.get("chunking", {}).get("chunk_size", 200))
     overlap = int(config.get("chunking", {}).get("overlap", 50))
 
@@ -154,7 +154,7 @@ else:
             else:
                 label = tr("multi_docs_label", n=len(docs))
                 types = {d.get("document_type") for d in docs if d.get("document_type")}
-                doc_type = ", ".join(sorted(t for t in types if t)) or "-"
+                doc_type = ", ".join(sorted(dt for dt in types if dt)) or "-"
             est_chunks = sum(
                 len(chunk_text(d.get("content") or "", chunk_size, overlap))
                 for d in docs
