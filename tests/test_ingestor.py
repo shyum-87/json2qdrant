@@ -1,5 +1,5 @@
 import json as json_module
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -8,10 +8,7 @@ from ingestor import (
     chunk_text,
     delete_existing_doc,
     embed_chunks,
-    get_or_create_collection,
     ingest_file,
-    is_qdrant_healthy,
-    load_config,
     load_documents,
 )
 
