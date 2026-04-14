@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ingestor import (
+    build_points,
     chunk_text,
     delete_existing_doc,
     embed_chunks,
@@ -120,3 +121,35 @@ def test_delete_existing_doc_filters_by_doc_id():
     condition = kwargs["points_selector"].filter.must[0]
     assert condition.key == "doc_id"
     assert condition.match.value == "2025_W34_abc"
+
+
+def test_build_points_copies_metadata_and_indexes():
+    doc = _doc("D42", content="body")
+    chunks = ["a", "bb", "ccc"]
+    vectors = [[0.1], [0.2], [0.3]]
+
+    points = build_points(doc, chunks, vectors, collection="my_docs")
+
+    assert len(points) == 3
+    for i, p in enumerate(points):
+        payload = p.payload
+        assert payload["doc_id"] == "D42"
+        assert payload["title"] == "T"
+        assert payload["document_type"] == "weekly_report"
+        assert payload["year"] == 2025
+        assert payload["week"] == 34
+        assert payload["source_file"] == "path/f.txt"
+        assert payload["filename"] == "f.txt"
+        assert payload["parts_total"] == 1
+        assert payload["part_index"] == 1
+        assert payload["chunk_index"] == i
+        assert payload["chunk_total"] == 3
+        assert payload["text"] == chunks[i]
+        assert payload["collection_name"] == "my_docs"
+    assert points[0].vector == [0.1]
+
+
+def test_build_points_length_mismatch_raises():
+    doc = _doc("D", "x")
+    with pytest.raises(ValueError):
+        build_points(doc, ["a", "b"], [[0.1]], collection="c")

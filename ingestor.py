@@ -102,34 +102,41 @@ def embed_chunks(model: Any, texts: list[str]) -> list[list[float]]:
     return vectors
 
 
-def upsert_points(
-    client: QdrantClient,
-    collection: str,
-    chunks: list[dict],
+_DOC_META_KEYS = (
+    "doc_id",
+    "title",
+    "created_time",
+    "source_file",
+    "filename",
+    "year",
+    "week",
+    "file_size",
+    "processed_at",
+    "document_type",
+    "parts_total",
+    "part_index",
+)
+
+
+def build_points(
+    doc: dict,
+    chunks: list[str],
     vectors: list[list[float]],
-    source_meta: dict,
-    batch_size: int = 32,
-) -> int:
-    points = []
-    for chunk, vector in zip(chunks, vectors):
-        payload = {
-            "source": source_meta["source"],
-            "file_type": source_meta["file_type"],
-            "chunk_id": chunk["chunk_id"],
-            "text": chunk["text"],
-            "page": chunk.get("page"),
-            "position": chunk.get("position"),
-            "author": source_meta.get("author"),
-            "title": source_meta.get("title"),
-            "language": source_meta.get("language"),
-            "collection_name": collection,
-        }
+    collection: str,
+) -> list[PointStruct]:
+    if len(chunks) != len(vectors):
+        raise ValueError("chunks and vectors length mismatch")
+    base_meta = {key: doc.get(key) for key in _DOC_META_KEYS}
+    total = len(chunks)
+    points: list[PointStruct] = []
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        payload = dict(base_meta)
+        payload["chunk_index"] = i
+        payload["chunk_total"] = total
+        payload["text"] = chunk
+        payload["collection_name"] = collection
         points.append(PointStruct(id=str(uuid.uuid4()), vector=vector, payload=payload))
-
-    for i in range(0, len(points), batch_size):
-        client.upsert(collection_name=collection, points=points[i : i + batch_size])
-
-    return len(points)
+    return points
 
 
 def ingest_file(
