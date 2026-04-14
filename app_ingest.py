@@ -87,11 +87,28 @@ with st.expander(tr("settings_header"), expanded=False):
     model_name_input = st.text_input(
         tr("model_name"), value=config["embedding"].get("model_name", "bge-m3:latest")
     )
+    chunk_size_input = st.number_input(
+        tr("chunk_size_label"),
+        min_value=50,
+        max_value=8000,
+        value=int(config.get("chunking", {}).get("chunk_size", 200)),
+        step=10,
+    )
+    overlap_input = st.number_input(
+        tr("overlap_label"),
+        min_value=0,
+        max_value=max(0, int(chunk_size_input) - 1),
+        value=int(config.get("chunking", {}).get("overlap", 50)),
+        step=10,
+    )
     if st.button(tr("save_settings_btn")):
         config["qdrant"]["default_collection"] = collection_name_input
         config["embedding"]["backend"] = "ollama"
         config["embedding"]["ollama_url"] = ollama_url_input
         config["embedding"]["model_name"] = model_name_input
+        config.setdefault("chunking", {})
+        config["chunking"]["chunk_size"] = int(chunk_size_input)
+        config["chunking"]["overlap"] = int(overlap_input)
         save_config()
         if "model" in st.session_state:
             del st.session_state["model"]
@@ -122,39 +139,59 @@ json_files = sorted(
 if not json_files:
     st.info(tr("no_json_files"))
 else:
+    from ingestor import load_documents, chunk_text  # local import avoids top-level cycle risk
+
+    chunk_size = int(config.get("chunking", {}).get("chunk_size", 200))
+    overlap = int(config.get("chunking", {}).get("overlap", 50))
+
     file_rows = []
     for f in json_files:
         try:
-            with open(f, "r", encoding="utf-8") as fp:
-                data = json.load(fp)
-            total_chunks = data.get("total_chunks", len(data.get("chunks", [])))
-            source = data.get("source", f.name)
-        except Exception:
-            total_chunks = tr("read_error")
-            source = f.name
+            docs = load_documents(f)
+            if len(docs) == 1:
+                label = docs[0].get("doc_id") or docs[0].get("title") or f.name
+                doc_type = docs[0].get("document_type") or "-"
+            else:
+                label = tr("multi_docs_label", n=len(docs))
+                types = {d.get("document_type") for d in docs if d.get("document_type")}
+                doc_type = ", ".join(sorted(t for t in types if t)) or "-"
+            est_chunks = sum(
+                len(chunk_text(d.get("content") or "", chunk_size, overlap))
+                for d in docs
+            )
+        except Exception as e:
+            label = tr("read_error")
+            doc_type = str(e)[:40]
+            est_chunks = "-"
         file_rows.append(
-            {"file": f, "name": f.name, "source": source, "chunks": total_chunks}
+            {"file": f, "name": f.name, "label": label, "doc_type": doc_type, "chunks": est_chunks}
         )
 
-    h1, h2, h3, h4 = st.columns([0.5, 3, 2.5, 1])
+    h1, h2, h3, h4, h5 = st.columns([0.5, 2.5, 2.5, 1.5, 1])
     h1.markdown(tr("col_select"))
     h2.markdown(tr("col_filename"))
-    h3.markdown(tr("col_source"))
-    h4.markdown(tr("col_chunks"))
+    h3.markdown(tr("col_doc_id"))
+    h4.markdown(tr("col_doc_type"))
+    h5.markdown(tr("col_est_chunks"))
     st.divider()
 
     selections = {}
     for row in file_rows:
-        c1, c2, c3, c4 = st.columns([0.5, 3, 2.5, 1])
+        c1, c2, c3, c4, c5 = st.columns([0.5, 2.5, 2.5, 1.5, 1])
         with c1:
             selections[row["name"]] = st.checkbox(
-                "", value=True, key=f"sel_{row['name']}", label_visibility="collapsed"
+                tr("checkbox_select_label"),
+                value=True,
+                key=f"sel_{row['name']}",
+                label_visibility="collapsed",
             )
         with c2:
             st.text(row["name"])
         with c3:
-            st.text(row["source"])
+            st.text(row["label"])
         with c4:
+            st.text(row["doc_type"])
+        with c5:
             st.text(str(row["chunks"]))
 
     st.divider()
@@ -192,9 +229,25 @@ else:
                 result = ingest_file(
                     json_path, collection_name, config, model, client
                 )
-                logs.append(
-                    tr("log_success", name=json_path.name, n=result["chunks_ingested"])
-                )
+                if result["errors"]:
+                    logs.append(
+                        tr(
+                            "log_doc_partial",
+                            name=json_path.name,
+                            docs=result["docs_processed"],
+                            chunks=result["chunks_ingested"],
+                            errors=len(result["errors"]),
+                        )
+                    )
+                else:
+                    logs.append(
+                        tr(
+                            "log_doc_success",
+                            name=json_path.name,
+                            docs=result["docs_processed"],
+                            chunks=result["chunks_ingested"],
+                        )
+                    )
             except Exception as e:
                 logs.append(tr("log_error", name=json_path.name, error=str(e)))
 
