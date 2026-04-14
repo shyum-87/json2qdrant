@@ -22,6 +22,21 @@ def load_config(config_path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError("잘못된 chunk_size/overlap")
+    text = text or ""
+    if not text:
+        return []
+    step = chunk_size - overlap
+    chunks: list[str] = []
+    for start in range(0, len(text), step):
+        piece = text[start : start + chunk_size]
+        if piece:
+            chunks.append(piece)
+    return chunks
+
+
 def get_qdrant_client(config: dict) -> QdrantClient:
     return QdrantClient(url=config["qdrant"]["url"], timeout=5)
 
