@@ -8,6 +8,10 @@ from ingestor import (
     chunk_text,
     delete_existing_doc,
     embed_chunks,
+    get_or_create_collection,
+    ingest_file,
+    is_qdrant_healthy,
+    load_config,
     load_documents,
 )
 
@@ -153,3 +157,94 @@ def test_build_points_length_mismatch_raises():
     doc = _doc("D", "x")
     with pytest.raises(ValueError):
         build_points(doc, ["a", "b"], [[0.1]], collection="c")
+
+
+def test_ingest_file_single_doc(tmp_path):
+    doc = _doc("D1", content="A" * 500)
+    f = tmp_path / "a.json"
+    f.write_text(json_module.dumps(doc), encoding="utf-8")
+
+    config = {
+        "embedding": {"embedding_dim": 3},
+        "chunking": {"chunk_size": 200, "overlap": 50},
+    }
+    mock_model = MagicMock()
+    mock_model.create_embedding.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+    mock_client = MagicMock()
+    mock_client.get_collections.return_value.collections = []
+
+    result = ingest_file(f, "my_docs", config, mock_model, mock_client)
+
+    assert result["file"] == "a.json"
+    assert result["docs_processed"] == 1
+    assert result["chunks_ingested"] == 4  # 500 chars, chunk=200, step=150 -> 4
+    assert result["errors"] == []
+    mock_client.create_collection.assert_called_once()
+    mock_client.delete.assert_called_once()
+    assert mock_client.upsert.called
+
+
+def test_ingest_file_jsonl_multi_doc(tmp_path):
+    docs = [_doc("D1", "short"), _doc("D2", "A" * 300)]
+    f = tmp_path / "a.jsonl"
+    f.write_text("\n".join(json_module.dumps(d) for d in docs), encoding="utf-8")
+
+    config = {
+        "embedding": {"embedding_dim": 3},
+        "chunking": {"chunk_size": 200, "overlap": 50},
+    }
+    mock_model = MagicMock()
+    mock_model.create_embedding.return_value = {"data": [{"embedding": [0.0, 0.0, 0.0]}]}
+    mock_client = MagicMock()
+    mock_client.get_collections.return_value.collections = []
+
+    result = ingest_file(f, "my_docs", config, mock_model, mock_client)
+
+    assert result["docs_processed"] == 2
+    # D1: "short" -> 1 chunk. D2: 300 chars, chunk=200/overlap=50 -> starts 0,150 -> 2 chunks
+    assert result["chunks_ingested"] == 3
+    assert mock_client.delete.call_count == 2
+
+
+def test_ingest_file_skips_empty_content(tmp_path):
+    doc = _doc("D1", content="")
+    f = tmp_path / "a.json"
+    f.write_text(json_module.dumps(doc), encoding="utf-8")
+
+    config = {
+        "embedding": {"embedding_dim": 3},
+        "chunking": {"chunk_size": 200, "overlap": 50},
+    }
+    mock_model = MagicMock()
+    mock_client = MagicMock()
+    mock_client.get_collections.return_value.collections = []
+
+    result = ingest_file(f, "my_docs", config, mock_model, mock_client)
+
+    assert result["chunks_ingested"] == 0
+    assert result["docs_processed"] == 1
+    assert any("빈 content" in e for e in result["errors"])
+    mock_client.upsert.assert_not_called()
+
+
+def test_ingest_file_missing_doc_id_uses_fallback(tmp_path):
+    doc = _doc("D1", content="hello")
+    doc.pop("doc_id")
+    f = tmp_path / "a.json"
+    f.write_text(json_module.dumps(doc), encoding="utf-8")
+
+    config = {
+        "embedding": {"embedding_dim": 3},
+        "chunking": {"chunk_size": 200, "overlap": 50},
+    }
+    mock_model = MagicMock()
+    mock_model.create_embedding.return_value = {"data": [{"embedding": [0.0, 0.0, 0.0]}]}
+    mock_client = MagicMock()
+    mock_client.get_collections.return_value.collections = []
+
+    result = ingest_file(f, "my_docs", config, mock_model, mock_client)
+
+    assert result["docs_processed"] == 1
+    assert any("doc_id" in e for e in result["errors"])
+    # still deletes using fallback key
+    mock_client.delete.assert_called_once()

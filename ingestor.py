@@ -139,6 +139,20 @@ def build_points(
     return points
 
 
+def _upsert_in_batches(
+    client: QdrantClient,
+    collection: str,
+    points: list[PointStruct],
+    batch_size: int = 32,
+) -> None:
+    for i in range(0, len(points), batch_size):
+        client.upsert(collection_name=collection, points=points[i : i + batch_size])
+
+
+def _fallback_doc_id(doc: dict) -> str:
+    return f"{doc.get('source_file') or ''}::{doc.get('filename') or ''}"
+
+
 def ingest_file(
     json_path: Path,
     collection: str,
@@ -146,31 +160,47 @@ def ingest_file(
     model: Any,
     client: QdrantClient,
 ) -> dict:
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    chunks = data.get("chunks", [])
-    if not chunks:
-        raise ValueError(f"청크가 없습니다: {json_path.name}")
-
-    source_meta = {
-        "source": data["source"],
-        "file_type": data["file_type"],
-        "author": data.get("author"),
-        "title": data.get("title"),
-        "language": data.get("language"),
-    }
+    docs = load_documents(json_path)
 
     dim = config["embedding"]["embedding_dim"]
+    chunk_cfg = config.get("chunking", {})
+    chunk_size = int(chunk_cfg.get("chunk_size", 200))
+    overlap = int(chunk_cfg.get("overlap", 50))
+
     get_or_create_collection(client, collection, dim)
-    delete_existing_source(client, collection, data["source"])
-    vectors = embed_chunks(model, chunks)
-    count = upsert_points(client, collection, chunks, vectors, source_meta)
+
+    total_chunks = 0
+    errors: list[str] = []
+
+    for doc in docs:
+        doc_id = doc.get("doc_id")
+        if not doc_id:
+            fallback = _fallback_doc_id(doc)
+            errors.append(f"doc_id 누락, fallback 사용: {fallback}")
+            doc_id = fallback
+
+        content = doc.get("content") or ""
+        if not content.strip():
+            errors.append(f"빈 content: {doc_id}")
+            delete_existing_doc(client, collection, doc_id)
+            continue
+
+        chunks = chunk_text(content, chunk_size, overlap)
+        if not chunks:
+            errors.append(f"청크 생성 실패: {doc_id}")
+            continue
+
+        delete_existing_doc(client, collection, doc_id)
+        vectors = embed_chunks(model, chunks)
+        points = build_points(doc, chunks, vectors, collection)
+        _upsert_in_batches(client, collection, points)
+        total_chunks += len(points)
 
     return {
-        "source": data["source"],
-        "collection": collection,
-        "chunks_ingested": count,
+        "file": json_path.name,
+        "docs_processed": len(docs),
+        "chunks_ingested": total_chunks,
+        "errors": errors,
     }
 
 
