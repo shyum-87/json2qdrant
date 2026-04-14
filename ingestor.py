@@ -37,6 +37,30 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     return chunks
 
 
+def load_documents(path: Path) -> list[dict]:
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        raise ValueError(f"빈 파일: {path.name}")
+    # Try JSONL first if it looks multi-line
+    if "\n" in raw:
+        try:
+            docs = [
+                json.loads(line) for line in raw.splitlines() if line.strip()
+            ]
+            if docs and all(isinstance(d, dict) for d in docs):
+                return docs
+        except json.JSONDecodeError:
+            pass
+    data = json.loads(raw)
+    if isinstance(data, list):
+        if not all(isinstance(d, dict) for d in data):
+            raise ValueError(f"배열 안에 객체가 아닌 항목: {path.name}")
+        return data
+    if isinstance(data, dict):
+        return [data]
+    raise ValueError(f"지원하지 않는 JSON 구조: {path.name}")
+
+
 def get_qdrant_client(config: dict) -> QdrantClient:
     return QdrantClient(url=config["qdrant"]["url"], timeout=5)
 
