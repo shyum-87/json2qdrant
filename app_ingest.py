@@ -134,18 +134,19 @@ with col_refresh:
     if st.button(tr("refresh_btn")):
         st.rerun()
 
-json_files = sorted(
-    f for f in input_dir.iterdir() if f.is_file() and f.suffix == ".json"
+supported_suffixes = {".json", ".jsonl"}
+input_files = sorted(
+    f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in supported_suffixes
 )
 
-if not json_files:
-    st.info(tr("no_json_files"))
+if not input_files:
+    st.info(tr("no_input_files"))
 else:
     chunk_size = int(config.get("chunking", {}).get("chunk_size", 200))
     overlap = int(config.get("chunking", {}).get("overlap", 50))
 
     file_rows = []
-    for f in json_files:
+    for f in input_files:
         try:
             docs = load_documents(f)
             if len(docs) == 1:

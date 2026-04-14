@@ -4,7 +4,7 @@ file2json으로 추출한 JSON 청크 파일을 임베딩하여 [Qdrant](https:/
 
 ## 주요 기능
 
-- 📂 `input/` 폴더의 JSON 청크 파일 자동 감지 및 목록화
+- 📂 `input/` 폴더의 JSON/JSONL 청크 파일 자동 감지 및 목록화
 - 🧠 [Ollama](https://ollama.com) HTTP API를 통한 임베딩 생성 (기본: `bge-m3:latest`, 1024-dim)
 - 🗄️ Qdrant 컬렉션 자동 생성 및 upsert (기존 `source` 값은 삭제 후 재적재)
 - ✅ 파일별 선택 적재 / 전체 적재
@@ -57,7 +57,7 @@ streamlit run app_ingest.py
 1. 우상단에서 **한국어 / 中文** 언어 선택
 2. Qdrant 연결 상태 확인 (🟢이면 정상)
 3. 필요 시 **⚙️ 설정**에서 컬렉션 이름, Ollama URL, 모델명 수정
-4. `input/` 폴더에 JSON 파일 배치 (file2json의 `output/`에서 복사)
+4. `input/` 폴더에 JSON/JSONL 파일 배치 (file2json의 `output/`에서 복사)
 5. **🔄 새로고침** → 파일 목록 갱신
 6. **✅ 선택 파일만 적재** 또는 **🔄 전체 적재** 클릭
 
