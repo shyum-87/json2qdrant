@@ -1,4 +1,3 @@
-import json
 import subprocess
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from ingestor import (
     get_qdrant_client,
     ingest_file,
     is_qdrant_healthy,
+    load_chunk_document,
     load_config,
     load_model,
 )
@@ -116,7 +116,9 @@ with col_refresh:
         st.rerun()
 
 json_files = sorted(
-    f for f in input_dir.iterdir() if f.is_file() and f.suffix == ".json"
+    f
+    for f in input_dir.iterdir()
+    if f.is_file() and f.suffix.lower() in {".json", ".jsonl"}
 )
 
 if not json_files:
@@ -125,8 +127,7 @@ else:
     file_rows = []
     for f in json_files:
         try:
-            with open(f, "r", encoding="utf-8") as fp:
-                data = json.load(fp)
+            data = load_chunk_document(f)
             total_chunks = data.get("total_chunks", len(data.get("chunks", [])))
             source = data.get("source", f.name)
         except Exception:
@@ -148,7 +149,10 @@ else:
         c1, c2, c3, c4 = st.columns([0.5, 3, 2.5, 1])
         with c1:
             selections[row["name"]] = st.checkbox(
-                "", value=True, key=f"sel_{row['name']}", label_visibility="collapsed"
+                tr("row_select_label", name=row["name"]),
+                value=True,
+                key=f"sel_{row['name']}",
+                label_visibility="collapsed",
             )
         with c2:
             st.text(row["name"])

@@ -28,6 +28,123 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## 폐쇄망/이동식 PC 설치 주의
+
+`venv` 또는 `.venv` 폴더는 생성 당시의 절대 경로를 실행 파일에 기록합니다. 다른 PC나 다른 드라이브로 프로젝트를 복사하면 `streamlit.exe`가 예전 경로의 `python.exe`를 실행하려고 하며 다음과 같은 오류가 발생할 수 있습니다.
+
+```text
+Fatal error in launcher: Unable to create process using '"G:\...\.venv\Scripts\python.exe" ...'
+```
+
+이 경우 복사해 온 `venv`/`.venv`는 재사용하지 말고 새 PC의 프로젝트 경로에서 다시 만드세요.
+
+```powershell
+# 프로젝트 루트에서 실행
+Deactivate 2>$null
+Remove-Item -Recurse -Force .\venv, .\.venv -ErrorAction SilentlyContinue
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run .\app_ingest.py
+```
+
+폐쇄망이라 인터넷 설치가 불가능하면, 외부망 PC에서 동일한 Python 버전/아키텍처로 wheelhouse를 준비한 뒤 복사해서 설치하세요.
+
+```powershell
+# 외부망 PC
+py -3.10 -m pip download -r requirements.txt -d wheelhouse
+
+# 폐쇄망 PC
+python -m pip install --no-index --find-links .\wheelhouse -r requirements.txt
+```
+
+`streamlit run ...` 대신 `python -m streamlit run ...`을 사용하면 현재 활성화된 가상환경의 Python을 명확히 사용하므로 launcher 경로 문제를 피하는 데 도움이 됩니다.
+
+첫 실행 시 터미널에 `Welcome to Streamlit!`와 `Email:` 안내가 뜨고 브라우저가 백지 화면처럼 보이면, Streamlit의 온보딩/사용 통계 안내가 먼저 표시된 상황일 수 있습니다. 이 저장소는 `.streamlit/config.toml`에서 사용 통계 수집을 끄고 `127.0.0.1:8501` 로컬 실행을 기본값으로 지정하므로, 최신 파일을 받은 뒤 아래 명령으로 다시 실행하세요.
+
+```powershell
+python -m streamlit run .\app_ingest.py
+```
+
+이미 실행 중인 Streamlit 프로세스가 있으면 `Ctrl + C`로 종료한 뒤 재실행하세요. 접속은 `Network URL`이 아니라 같은 PC의 `http://127.0.0.1:8501` 또는 `http://localhost:8501`을 우선 사용하세요.
+
+그래도 브라우저가 백지면 Streamlit 서버 응답과 브라우저/WebSocket 연결 문제를 분리해서 확인하세요.
+
+```powershell
+# Streamlit 서버가 살아있는지 확인합니다. 정상이라면 ok가 반환됩니다.
+Invoke-RestMethod http://127.0.0.1:8501/_stcore/health
+
+# 사내 프록시가 localhost 통신까지 가로채는 환경이면 현재 PowerShell 세션에서 우회합니다.
+$env:NO_PROXY = "localhost,127.0.0.1"
+$env:no_proxy = "localhost,127.0.0.1"
+python -m streamlit run .\app_ingest.py --server.address 127.0.0.1 --browser.serverAddress 127.0.0.1 --server.headless true --logger.level debug
+```
+
+`/_stcore/health`가 `ok`인데 화면만 백지라면 앱 Python 코드보다는 브라우저 캐시, 보안 프로그램, 프록시, WebSocket 차단 가능성이 큽니다. Edge/Chrome의 InPrivate 창에서 `http://127.0.0.1:8501`로 다시 열고, 개발자 도구 콘솔에 WebSocket 또는 JavaScript 오류가 있는지 확인하세요. 터미널에 Python traceback이 추가로 찍히면 그 전체 로그를 확인해야 합니다.
+
+Edge 개발자 도구에 `edge Translation started`, `Translation timed out`, `edge.microsoft.com/translate/auth`, `Uncaught SyntaxError: Unexpected token '{'`가 함께 보이면 Edge의 자동 번역 기능이 Streamlit 프론트엔드 JavaScript에 개입한 상황일 수 있습니다. 이 경우 앱 서버는 정상이어도 화면이 백지로 보일 수 있으므로 아래 순서로 브라우저 번역을 끄고 다시 접속하세요.
+
+1. 주소창의 번역 아이콘에서 **이 사이트 번역 안 함** 또는 **원문 보기**를 선택합니다.
+2. Edge 설정(`edge://settings/languages`)에서 **내가 읽는 언어가 아닌 페이지 번역 제안**을 끕니다.
+3. `http://127.0.0.1:8501`를 새 InPrivate 창에서 열거나, Chrome/다른 브라우저로 열어 비교합니다.
+4. 그래도 동일하면 개발자 도구 콘솔의 첫 번째 JavaScript 오류와 Network 탭의 실패 요청을 확인합니다.
+
+번역 기능을 꺼도 `Uncaught SyntaxError: Unexpected token '{'`만 계속 보이면, 브라우저가 받은 Streamlit 프론트엔드 번들 또는 정적 자산 응답을 확인해야 합니다. 중국/폐쇄망 PC에 이미 `streamlit==1.56.0` wheel만 준비된 경우를 지원하기 위해 이 프로젝트는 `requirements.txt`에서 Streamlit을 `1.56.0`으로 고정합니다. `python -m streamlit version`도 `1.56.0`이어야 합니다.
+
+먼저 현재 PowerShell이 실제로 어떤 Python/Streamlit을 쓰는지 진단하세요.
+
+```powershell
+# PowerShell의 where는 별칭일 수 있으므로 where.exe 또는 Get-Command를 사용합니다.
+where.exe python
+Get-Command python
+
+# python이 어떤 실행 파일인지 확인합니다. 가상환경이면 보통 .\sessvenv\Scripts\python.exe 여야 합니다.
+python -c "import sys; print(sys.executable); print(sys.version)"
+
+# pip show가 오래된 pip/Python 조합에서 깨질 수 있으므로 importlib.metadata로 확인합니다.
+python -c "import importlib.metadata as m; print(m.version('streamlit'))"
+python .\diagnose_streamlit_env.py
+```
+
+`diagnose_streamlit_env.py`가 `status=version_mismatch`를 출력하면 현재 활성화된 가상환경이 `requirements.txt`와 다릅니다. 또한 `python -c "import sys; print(sys.executable)"` 결과가 `D:\Miniconda3\python.exe`처럼 전역/conda Python을 가리키면, 프롬프트에 `(sessvenv)`가 보여도 실제 `python` 명령은 프로젝트 가상환경을 쓰지 않는 상태입니다. 이때는 아래처럼 가상환경의 Python을 명시해서 실행해 보세요.
+
+```powershell
+.\sessvenv\Scripts\python.exe -c "import sys; print(sys.executable); print(sys.version)"
+.\sessvenv\Scripts\python.exe .\diagnose_streamlit_env.py
+.\sessvenv\Scripts\python.exe -m streamlit run .\smoke_streamlit.py --server.address 127.0.0.1 --browser.serverAddress 127.0.0.1 --server.headless true
+```
+
+폐쇄망 PC에 있는 wheelhouse 기준으로 다시 설치하려면 다음 명령을 사용합니다.
+
+```powershell
+python -m pip install --no-index --find-links .\wheelhouse --force-reinstall -r requirements.txt
+python .\diagnose_streamlit_env.py
+```
+
+버전이 맞는데도 백지면 먼저 json2qdrant 앱을 배제하고 Streamlit 자체 렌더링만 확인합니다. 아래 smoke-test 앱은 Qdrant/Ollama/config/input 파일을 전혀 읽지 않습니다.
+
+```powershell
+python -m streamlit run .\smoke_streamlit.py --server.address 127.0.0.1 --browser.serverAddress 127.0.0.1 --server.headless true
+```
+
+- `smoke_streamlit.py`도 백지이면 json2qdrant 코드 문제가 아니라 Streamlit 프론트엔드, 브라우저, 캐시, 보안 프로그램, WebSocket/정적 JS 차단 문제입니다.
+- `smoke_streamlit.py`는 보이는데 `app_ingest.py`만 백지이면 터미널의 Python traceback 또는 앱 설정/입력 파일 문제를 확인해야 합니다.
+
+그 다음 Streamlit을 켜둔 상태에서 프론트엔드 응답을 점검합니다.
+
+```powershell
+python .\diagnose_streamlit_env.py --probe-url http://127.0.0.1:8501
+```
+
+`/_stcore/health`가 `ok`이고 정적 JS의 `content_type`이 JavaScript 계열이면 서버와 자산 제공은 정상입니다. 이 경우 Edge의 캐시/사이트 데이터, 호환성 모드(IE mode), 보안 프로그램의 스크립트 검사, 확장 프로그램 문제가 남습니다. Edge에서 `Ctrl+F5` 강력 새로고침, 사이트 데이터 삭제, InPrivate 창, IE mode 비활성화, Chrome/다른 브라우저 비교를 순서대로 확인하세요.
+
+정적 JS의 `content_type`이 JSON/HTML이거나 `probe_static_js_sample`이 `{`로 시작하면 Streamlit JavaScript 파일 요청이 보안 장비/프록시/브라우저 기능에 의해 다른 응답으로 바뀐 것입니다. 이 경우 앱 코드가 아니라 로컬 브라우저/보안 환경에서 `http://127.0.0.1:8501/static/...js` 요청을 예외 처리해야 합니다.
+
+`python -m pip show streamlit`이 `AttributeError: module 'pkgutil' has no attribute 'ImpImporter'`로 실패하면 앱 문제가 아니라 오래된 pip가 Python 3.12+와 맞지 않는 상황입니다. 버전 확인은 위의 `importlib.metadata` 명령이나 `diagnose_streamlit_env.py`를 사용하고, pip 자체는 wheelhouse에 있는 최신 pip wheel 또는 `python -m ensurepip --upgrade`로 복구해야 합니다.
+
+Streamlit debug 로그의 `No ASGI app assignments found`, `RuntimeState.NO_SESSIONS_CONNECTED`는 보통 치명적 오류가 아닙니다. `Server started on port 8501`와 `URL: http://127.0.0.1:8501`가 표시되면 서버는 기동된 상태이며, 브라우저가 접속하면 세션 상태가 바뀝니다.
+
 ## Qdrant 준비
 
 **옵션 1. 로컬 바이너리 (Windows)**
@@ -57,13 +174,13 @@ streamlit run app_ingest.py
 1. 우상단에서 **한국어 / 中文** 언어 선택
 2. Qdrant 연결 상태 확인 (🟢이면 정상)
 3. 필요 시 **⚙️ 설정**에서 컬렉션 이름, Ollama URL, 모델명 수정
-4. `input/` 폴더에 JSON 파일 배치 (file2json의 `output/`에서 복사)
+4. `input/` 폴더에 JSON/JSONL 파일 배치 (file2json의 `output/`에서 복사)
 5. **🔄 새로고침** → 파일 목록 갱신
 6. **✅ 선택 파일만 적재** 또는 **🔄 전체 적재** 클릭
 
-## 입력 JSON 포맷
+## 입력 JSON/JSONL 포맷
 
-file2json 출력과 호환되는 스키마:
+file2json 출력과 호환되는 스키마입니다. 청크 본문 필드는 `content`를 기본으로 사용하며, 구버전 `text`도 읽을 수 있습니다:
 
 ```json
 {
@@ -76,7 +193,7 @@ file2json 출력과 호환되는 스키마:
   "chunks": [
     {
       "chunk_id": "c1",
-      "text": "청크 본문...",
+      "content": "청크 본문...",
       "page": 1,
       "position": 0
     }
@@ -113,7 +230,7 @@ json2qdrant/
 ├── i18n.py           # 한/중 번역 딕셔너리 + t() 헬퍼
 ├── config.yaml       # 런타임 설정
 ├── requirements.txt
-├── input/            # 입력 JSON 배치 위치
+├── input/            # 입력 JSON/JSONL 배치 위치
 ├── qdrant/           # (선택) 로컬 Qdrant 바이너리
 ├── tests/
 └── docs/superpowers/specs/
@@ -134,7 +251,7 @@ Streamlit에 의존하지 않는 순수 함수 모음. 단위 테스트 가능.
 | `get_or_create_collection(client, name, dim)` | 컬렉션이 없으면 `Cosine` 거리로 생성 |
 | `delete_existing_source(client, collection, source)` | 동일 `source` 포인트를 필터 삭제 (재적재 시 중복 방지) |
 | `embed_chunks(model, chunks)` | 청크별로 Ollama에 임베딩 요청, 벡터 리스트 반환 |
-| `upsert_points(client, collection, chunks, vectors, source_meta)` | 페이로드(`source`, `page`, `text` 등)와 함께 UUID 포인트로 upsert |
+| `upsert_points(client, collection, chunks, vectors, source_meta)` | 페이로드(`source`, `page`, `content` 등)와 함께 UUID 포인트로 upsert |
 | `ingest_file(json_path, collection, config, model, client)` | 위 단계를 한 파일에 대해 오케스트레이션 |
 
 ### `i18n.py` — 경량 i18n 레이어
@@ -165,7 +282,7 @@ def t(key: str, lang: str, **kwargs) -> str:
 2. **언어 토글** — 제목 우측 `st.radio`(가로). 변경 감지 시 `config.yaml` 저장 → `st.rerun()`
 3. **Qdrant 상태 바** — `is_qdrant_healthy()` 결과를 초록/빨강으로 표시. `qdrant/qdrant.exe` 존재 시 **🚀 Qdrant 시작** 버튼 동작
 4. **설정 expander** — 컬렉션 이름/Ollama URL/모델명 편집 → 저장 시 `config.yaml` 갱신 및 모델 재로드
-5. **파일 테이블** — `input/*.json` 스캔 → 각 파일의 `total_chunks`, `source` 파싱 → 체크박스로 선택
+5. **파일 테이블** — `input/*.json`, `input/*.jsonl` 스캔 → 각 파일의 `total_chunks`, `source` 파싱 → 체크박스로 선택
 6. **적재** — 선택/전체 파일을 순회하며 `ingest_file()` 호출. 결과를 진행 바와 로그로 실시간 표시
 7. **번역 적용** — UI 문자열은 모두 로컬 헬퍼 `tr("key", **kwargs)`를 경유 (`tr`은 `t`를 `st.session_state["lang"]`로 바인딩)
 

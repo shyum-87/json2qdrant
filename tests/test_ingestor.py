@@ -9,6 +9,7 @@ from ingestor import (
     get_or_create_collection,
     ingest_file,
     is_qdrant_healthy,
+    load_chunk_document,
     load_config,
     upsert_points,
 )
@@ -82,7 +83,7 @@ def test_embed_chunks_returns_vectors():
     mock_model.create_embedding.return_value = {
         "data": [{"embedding": [0.1, 0.2, 0.3]}]
     }
-    chunks = [{"text": "첫 번째 청크"}, {"text": "두 번째 청크"}]
+    chunks = [{"content": "첫 번째 청크"}, {"content": "두 번째 청크"}]
 
     result = embed_chunks(mock_model, chunks)
 
@@ -102,7 +103,7 @@ def test_embed_chunks_empty():
 def test_upsert_points():
     mock_client = MagicMock()
     chunks = [
-        {"chunk_id": 0, "text": "텍스트", "page": 1, "position": "first"},
+        {"chunk_id": 0, "content": "텍스트", "page": 1, "position": "first"},
     ]
     vectors = [[0.1, 0.2, 0.3]]
     source_meta = {
@@ -122,7 +123,7 @@ def test_upsert_points():
     points = call_kwargs["points"]
     assert len(points) == 1
     assert points[0].payload["source"] == "test.pdf"
-    assert points[0].payload["text"] == "텍스트"
+    assert points[0].payload["content"] == "텍스트"
     assert points[0].payload["language"] == "ko"
     assert points[0].vector == [0.1, 0.2, 0.3]
 
@@ -130,7 +131,7 @@ def test_upsert_points():
 def test_upsert_points_batching():
     mock_client = MagicMock()
     chunks = [
-        {"chunk_id": i, "text": f"텍스트{i}", "page": None, "position": "middle"}
+        {"chunk_id": i, "content": f"텍스트{i}", "page": None, "position": "middle"}
         for i in range(50)
     ]
     vectors = [[0.1] * 3 for _ in range(50)]
@@ -156,8 +157,8 @@ def test_ingest_file(tmp_path):
         "title": "2024 보고서",
         "language": "ko",
         "chunks": [
-            {"chunk_id": 0, "text": "첫 번째 내용", "page": 1, "position": "first"},
-            {"chunk_id": 1, "text": "두 번째 내용", "page": 1, "position": "last"},
+            {"chunk_id": 0, "content": "첫 번째 내용", "page": 1, "position": "first"},
+            {"chunk_id": 1, "content": "두 번째 내용", "page": 1, "position": "last"},
         ],
     }
     json_file = tmp_path / "보고서.json"
@@ -192,3 +193,122 @@ def test_ingest_file_empty_chunks(tmp_path):
 
     with pytest.raises(ValueError, match="청크가 없습니다"):
         ingest_file(json_file, "my_docs", config, mock_model, mock_client)
+
+
+def test_load_chunk_document_jsonl(tmp_path):
+    jsonl_file = tmp_path / "file1.jsonl"
+    jsonl_file.write_text(
+        "\n".join(
+            [
+                json_module.dumps(
+                    {
+                        "source": "source.pdf",
+                        "file_type": "pdf",
+                        "language": "ko",
+                        "chunk_id": 0,
+                        "content": "첫 번째",
+                        "page": 1,
+                        "position": "first",
+                    },
+                    ensure_ascii=False,
+                ),
+                json_module.dumps(
+                    {
+                        "source": "source.pdf",
+                        "file_type": "pdf",
+                        "language": "ko",
+                        "chunk_id": 1,
+                        "content": "두 번째",
+                        "page": 1,
+                        "position": "last",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    data = load_chunk_document(jsonl_file)
+
+    assert data["source"] == "source.pdf"
+    assert data["file_type"] == "pdf"
+    assert len(data["chunks"]) == 2
+    assert data["chunks"][0]["content"] == "첫 번째"
+    assert data["chunks"][1]["chunk_id"] == 1
+
+
+def test_ingest_file_jsonl(tmp_path):
+    jsonl_file = tmp_path / "file1.jsonl"
+    jsonl_file.write_text(
+        "\n".join(
+            [
+                json_module.dumps(
+                    {
+                        "source": "source.pdf",
+                        "file_type": "pdf",
+                        "chunk_id": 0,
+                        "content": "첫 번째",
+                    },
+                    ensure_ascii=False,
+                ),
+                json_module.dumps(
+                    {
+                        "source": "source.pdf",
+                        "file_type": "pdf",
+                        "chunk_id": 1,
+                        "content": "두 번째",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = {"embedding": {"embedding_dim": 1024}}
+    mock_model = MagicMock()
+    mock_model.create_embedding.return_value = {"data": [{"embedding": [0.1] * 1024}]}
+    mock_client = MagicMock()
+    mock_client.get_collections.return_value.collections = []
+
+    result = ingest_file(jsonl_file, "my_docs", config, mock_model, mock_client)
+
+    assert result["source"] == "source.pdf"
+    assert result["chunks_ingested"] == 2
+    mock_client.upsert.assert_called_once()
+
+
+def test_load_chunk_document_jsonl_nested_content(tmp_path):
+    jsonl_file = tmp_path / "nested.jsonl"
+    jsonl_file.write_text(
+        "\n".join(
+            [
+                json_module.dumps(
+                    {
+                        "source": "weekly_reports.pdf",
+                        "file_type": "pdf",
+                        "chunk_id": 0,
+                        "chunk": {"content": "중첩 첫 번째"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json_module.dumps(
+                    {
+                        "source": "weekly_reports.pdf",
+                        "file_type": "pdf",
+                        "chunk_id": 1,
+                        "payload": {"text": "중첩 두 번째"},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    data = load_chunk_document(jsonl_file)
+
+    assert len(data["chunks"]) == 2
+    assert data["chunks"][0]["content"] == "중첩 첫 번째"
+    assert data["chunks"][1]["content"] == "중첩 두 번째"
