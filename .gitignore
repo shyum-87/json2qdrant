@@ -5,4 +5,6 @@ input/
 !input/.gitkeep
 qdrant/qdrant.exe
 qdrant/storage/
+qdrant/.qdrant-initialized
+qdrant/qdrant-x86_64-pc-windows-msvc/
 .claude/
