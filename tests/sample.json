@@ -1,0 +1,15 @@
+{
+  "doc_id": "2025_W34_sample",
+  "title": "샘플 주간보고",
+  "content": "이것은 샘플 주간보고 내용입니다. 청크 테스트용 본문이며 충분한 길이를 갖도록 반복합니다. ",
+  "created_time": "2025-08-24",
+  "source_file": "input/sample.docx",
+  "filename": "sample.docx",
+  "year": 2025,
+  "week": 34,
+  "file_size": 1234,
+  "processed_at": "2025-08-24 00:00:00",
+  "document_type": "weekly_report",
+  "parts_total": 1,
+  "part_index": 1
+}

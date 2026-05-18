@@ -45,6 +45,45 @@ def load_config(config_path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError("잘못된 chunk_size/overlap")
+    text = text or ""
+    if not text:
+        return []
+    step = chunk_size - overlap
+    chunks: list[str] = []
+    for start in range(0, len(text), step):
+        piece = text[start : start + chunk_size]
+        if piece:
+            chunks.append(piece)
+    return chunks
+
+
+def load_documents(path: Path) -> list[dict]:
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        raise ValueError(f"빈 파일: {path.name}")
+    # Try JSONL first if it looks multi-line
+    if "\n" in raw:
+        try:
+            docs = [
+                json.loads(line) for line in raw.splitlines() if line.strip()
+            ]
+            if docs and all(isinstance(d, dict) for d in docs):
+                return docs
+        except json.JSONDecodeError:
+            pass
+    data = json.loads(raw)
+    if isinstance(data, list):
+        if not all(isinstance(d, dict) for d in data):
+            raise ValueError(f"배열 안에 객체가 아닌 항목: {path.name}")
+        return data
+    if isinstance(data, dict):
+        return [data]
+    raise ValueError(f"지원하지 않는 JSON 구조: {path.name}")
+
+
 def get_qdrant_client(config: dict) -> QdrantClient:
     return QdrantClient(url=config["qdrant"]["url"], timeout=5)
 
@@ -67,18 +106,18 @@ def get_or_create_collection(client: QdrantClient, name: str, dim: int) -> None:
         )
 
 
-def delete_existing_source(client: QdrantClient, collection: str, source: str) -> None:
+def delete_existing_doc(client: QdrantClient, collection: str, doc_id: str) -> None:
     client.delete(
         collection_name=collection,
         points_selector=FilterSelector(
             filter=Filter(
-                must=[FieldCondition(key="source", match=MatchValue(value=source))]
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
             )
         ),
     )
 
 
-def embed_chunks(model: Any, chunks: list[dict]) -> list[list[float]]:
+def embed_chunks(model: Any, texts: list[str]) -> list[list[float]]:
     vectors: list[list[float]] = []
     for chunk in chunks:
         content = _pick_content(chunk)
@@ -89,10 +128,25 @@ def embed_chunks(model: Any, chunks: list[dict]) -> list[list[float]]:
     return vectors
 
 
-def upsert_points(
-    client: QdrantClient,
-    collection: str,
-    chunks: list[dict],
+_DOC_META_KEYS = (
+    "doc_id",
+    "title",
+    "created_time",
+    "source_file",
+    "filename",
+    "year",
+    "week",
+    "file_size",
+    "processed_at",
+    "document_type",
+    "parts_total",
+    "part_index",
+)
+
+
+def build_points(
+    doc: dict,
+    chunks: list[str],
     vectors: list[list[float]],
     source_meta: dict,
     batch_size: int = 32,
@@ -115,11 +169,21 @@ def upsert_points(
             "collection_name": collection,
         }
         points.append(PointStruct(id=str(uuid.uuid4()), vector=vector, payload=payload))
+    return points
 
+
+def _upsert_in_batches(
+    client: QdrantClient,
+    collection: str,
+    points: list[PointStruct],
+    batch_size: int = 32,
+) -> None:
     for i in range(0, len(points), batch_size):
         client.upsert(collection_name=collection, points=points[i : i + batch_size])
 
-    return len(points)
+
+def _fallback_doc_id(doc: dict) -> str:
+    return f"{doc.get('source_file') or ''}::{doc.get('filename') or ''}"
 
 
 def load_chunk_document(json_path: Path) -> dict:
@@ -207,15 +271,44 @@ def ingest_file(
     }
 
     dim = config["embedding"]["embedding_dim"]
+    chunk_cfg = config.get("chunking", {})
+    chunk_size = int(chunk_cfg.get("chunk_size", 200))
+    overlap = int(chunk_cfg.get("overlap", 50))
+
     get_or_create_collection(client, collection, dim)
-    delete_existing_source(client, collection, data["source"])
-    vectors = embed_chunks(model, chunks)
-    count = upsert_points(client, collection, chunks, vectors, source_meta)
+
+    total_chunks = 0
+    errors: list[str] = []
+
+    for doc in docs:
+        doc_id = doc.get("doc_id")
+        if not doc_id:
+            fallback = _fallback_doc_id(doc)
+            errors.append(f"doc_id 누락, fallback 사용: {fallback}")
+            doc_id = fallback
+
+        content = doc.get("content") or ""
+        if not content.strip():
+            errors.append(f"빈 content: {doc_id}")
+            delete_existing_doc(client, collection, doc_id)
+            continue
+
+        chunks = chunk_text(content, chunk_size, overlap)
+        if not chunks:
+            errors.append(f"청크 생성 실패: {doc_id}")
+            continue
+
+        delete_existing_doc(client, collection, doc_id)
+        vectors = embed_chunks(model, chunks)
+        points = build_points(doc, chunks, vectors, collection)
+        _upsert_in_batches(client, collection, points)
+        total_chunks += len(points)
 
     return {
-        "source": data["source"],
-        "collection": collection,
-        "chunks_ingested": count,
+        "file": json_path.name,
+        "docs_processed": len(docs),
+        "chunks_ingested": total_chunks,
+        "errors": errors,
     }
 
 
