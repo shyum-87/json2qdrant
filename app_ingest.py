@@ -1,4 +1,3 @@
-import json
 import subprocess
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from ingestor import (
     get_qdrant_client,
     ingest_file,
     is_qdrant_healthy,
+    load_chunk_document,
     load_config,
     load_documents,
     load_model,
@@ -135,7 +135,9 @@ with col_refresh:
         st.rerun()
 
 json_files = sorted(
-    f for f in input_dir.iterdir() if f.is_file() and f.suffix == ".json"
+    f
+    for f in input_dir.iterdir()
+    if f.is_file() and f.suffix.lower() in {".json", ".jsonl"}
 )
 
 if not json_files:
@@ -147,22 +149,12 @@ else:
     file_rows = []
     for f in json_files:
         try:
-            docs = load_documents(f)
-            if len(docs) == 1:
-                label = docs[0].get("doc_id") or docs[0].get("title") or f.name
-                doc_type = docs[0].get("document_type") or "-"
-            else:
-                label = tr("multi_docs_label", n=len(docs))
-                types = {d.get("document_type") for d in docs if d.get("document_type")}
-                doc_type = ", ".join(sorted(dt for dt in types if dt)) or "-"
-            est_chunks = sum(
-                len(chunk_text(d.get("content") or "", chunk_size, overlap))
-                for d in docs
-            )
-        except Exception as e:
-            label = tr("read_error")
-            doc_type = str(e)[:40]
-            est_chunks = "-"
+            data = load_chunk_document(f)
+            total_chunks = data.get("total_chunks", len(data.get("chunks", [])))
+            source = data.get("source", f.name)
+        except Exception:
+            total_chunks = tr("read_error")
+            source = f.name
         file_rows.append(
             {"file": f, "name": f.name, "label": label, "doc_type": doc_type, "chunks": est_chunks}
         )
@@ -180,7 +172,7 @@ else:
         c1, c2, c3, c4, c5 = st.columns([0.5, 2.5, 2.5, 1.5, 1])
         with c1:
             selections[row["name"]] = st.checkbox(
-                tr("checkbox_select_label"),
+                tr("row_select_label", name=row["name"]),
                 value=True,
                 key=f"sel_{row['name']}",
                 label_visibility="collapsed",

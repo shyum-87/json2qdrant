@@ -17,6 +17,29 @@ from qdrant_client.models import (
 )
 
 
+def _pick_content(record: dict) -> str | None:
+    candidates = (
+        record.get("content"),
+        record.get("text"),
+        record.get("chunk"),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            return candidate
+        if isinstance(candidate, dict):
+            nested = _pick_content(candidate)
+            if nested is not None:
+                return nested
+
+    for container_key in ("payload", "metadata", "meta", "data"):
+        nested_obj = record.get(container_key)
+        if isinstance(nested_obj, dict):
+            nested = _pick_content(nested_obj)
+            if nested is not None:
+                return nested
+    return None
+
+
 def load_config(config_path: str = "config.yaml") -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -96,8 +119,11 @@ def delete_existing_doc(client: QdrantClient, collection: str, doc_id: str) -> N
 
 def embed_chunks(model: Any, texts: list[str]) -> list[list[float]]:
     vectors: list[list[float]] = []
-    for text in texts:
-        response = model.create_embedding(text)
+    for chunk in chunks:
+        content = _pick_content(chunk)
+        if content is None:
+            raise ValueError("chunk에 content/text 필드가 없습니다.")
+        response = model.create_embedding(content)
         vectors.append(response["data"][0]["embedding"])
     return vectors
 
@@ -122,19 +148,26 @@ def build_points(
     doc: dict,
     chunks: list[str],
     vectors: list[list[float]],
-    collection: str,
-) -> list[PointStruct]:
-    if len(chunks) != len(vectors):
-        raise ValueError("chunks and vectors length mismatch")
-    base_meta = {key: doc.get(key) for key in _DOC_META_KEYS}
-    total = len(chunks)
-    points: list[PointStruct] = []
-    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
-        payload = dict(base_meta)
-        payload["chunk_index"] = i
-        payload["chunk_total"] = total
-        payload["text"] = chunk
-        payload["collection_name"] = collection
+    source_meta: dict,
+    batch_size: int = 32,
+) -> int:
+    points = []
+    for chunk, vector in zip(chunks, vectors):
+        content = _pick_content(chunk)
+        if content is None:
+            raise ValueError("chunk에 content/text 필드가 없습니다.")
+        payload = {
+            "source": source_meta["source"],
+            "file_type": source_meta["file_type"],
+            "chunk_id": chunk["chunk_id"],
+            "content": content,
+            "page": chunk.get("page"),
+            "position": chunk.get("position"),
+            "author": source_meta.get("author"),
+            "title": source_meta.get("title"),
+            "language": source_meta.get("language"),
+            "collection_name": collection,
+        }
         points.append(PointStruct(id=str(uuid.uuid4()), vector=vector, payload=payload))
     return points
 
@@ -153,6 +186,69 @@ def _fallback_doc_id(doc: dict) -> str:
     return f"{doc.get('source_file') or ''}::{doc.get('filename') or ''}"
 
 
+def load_chunk_document(json_path: Path) -> dict:
+    """Load file2json output from .json or .jsonl into a canonical document shape."""
+    if json_path.suffix.lower() == ".jsonl":
+        records: list[dict] = []
+        with open(json_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                records.append(json.loads(line))
+
+        if not records:
+            return {"source": json_path.name, "file_type": "jsonl", "chunks": []}
+
+        chunks: list[dict] = []
+        for i, rec in enumerate(records):
+            content = _pick_content(rec)
+            if content is None:
+                raise ValueError(
+                    f"content/text 필드가 없습니다: {json_path.name} line {i + 1}"
+                )
+
+            chunks.append(
+                {
+                    "chunk_id": rec.get("chunk_id", i),
+                    "content": content,
+                    "page": rec.get("page"),
+                    "position": rec.get("position"),
+                }
+            )
+
+        first = records[0]
+        return {
+            "source": first.get("source", json_path.stem),
+            "file_type": first.get("file_type", "jsonl"),
+            "author": first.get("author"),
+            "title": first.get("title"),
+            "language": first.get("language"),
+            "chunks": chunks,
+        }
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    chunks = data.get("chunks", [])
+    normalized_chunks: list[dict] = []
+    for i, chunk in enumerate(chunks):
+        content = _pick_content(chunk)
+        if content is None:
+            raise ValueError(f"content/text 필드가 없습니다: {json_path.name} chunk {i}")
+        normalized_chunks.append(
+            {
+                "chunk_id": chunk.get("chunk_id", i),
+                "content": content,
+                "page": chunk.get("page"),
+                "position": chunk.get("position"),
+            }
+        )
+
+    data["chunks"] = normalized_chunks
+    return data
+
+
 def ingest_file(
     json_path: Path,
     collection: str,
@@ -160,7 +256,19 @@ def ingest_file(
     model: Any,
     client: QdrantClient,
 ) -> dict:
-    docs = load_documents(json_path)
+    data = load_chunk_document(json_path)
+
+    chunks = data.get("chunks", [])
+    if not chunks:
+        raise ValueError(f"청크가 없습니다: {json_path.name}")
+
+    source_meta = {
+        "source": data["source"],
+        "file_type": data["file_type"],
+        "author": data.get("author"),
+        "title": data.get("title"),
+        "language": data.get("language"),
+    }
 
     dim = config["embedding"]["embedding_dim"]
     chunk_cfg = config.get("chunking", {})
